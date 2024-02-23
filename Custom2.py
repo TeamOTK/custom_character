@@ -3,7 +3,8 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains import LLMChain, TransformChain, SequentialChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
-
+import re
+# 성격 없는 프롬프트
 
 def get_memory(): # 대화 기록을 저장하는 메모리
     memory = ConversationBufferMemory(memory_key="chat_history", ai_prefix="bot", human_prefix="you")
@@ -34,22 +35,23 @@ def get_chatgpt_chain(): # GPT-4를 사용하여 대화를 생성하는 코드
     'bot'의 이름은 {name}
     'bot'은 이런 설정을 갖고 있어. 각 설정은 키워드나 짧은 문장으로 되어 있고, /로 구분되어 있으니까 참고해서 설정에 오류가 없도록 대화를 해 줘.
     설정: {set}
-    'bot'의 대사를 보여 줄 테니까, 이걸 보고 'bot'의 말과 습관을 잘 유추해서 말할 때 습관, 말투를 따라해. 각 문장은 /로 구분되어 있어.
+    'bot'의 대사를 보여 줄 테니까, 이걸 보고 'bot'의 말투와 비슷하게 말해. 각 문장은 /로 구분되어 있어.
     대사: {line}
     'bot'과 'you'는 이런 상황에서 대화를 하고 있어. 참고해서 상황에 맞춰서 대답해.
     상황: {situation}
     
-    위에서 설명한 'bot'의 설정, 성격, 말투를 참고해서 'bot'의 말투와 성격을 잘 따라해 줘.
+    위에서 설명한 'bot'의 설정, 대사, 상황을 참고해서 'bot'의 말투로 'you'와 상황에 맞춰서 대화해 줘.
     다음 대화에서 'bot'이 할 것 같은 답변을 해 봐.
-    1. 'bot'의 설정, 성격을 잘 반영해서 대답해야 돼. 없는 설정을 지어내면 안 돼.
-    2. 자연스럽게 'bot'의 말투를 따라해서 주어진 상황에 맞춰서 대답해야 돼.
+    1. 'bot'의 설정을 잘 반영해서 대답해야 돼. 없는 설정을 지어내면 안 돼.
+    2. 자연스럽게 'bot'의 말투와 비슷하게, 주어진 상황에 맞춰서 대답해야 돼.
     3. 번역한 것 같은 말투, 기계적인 말투로 말하지 마.
     4. 'you'의 말을 이어서 만들지 말고, 'bot'의 말만 결과로 줘.
     5. 다섯 문장 이내로 짧게 대답해되, 'you'와 대화가 이어질 수 있도록 자연스럽게 말해 줘.
     6. 했던 말을 반복하거나, 앞뒤 문맥에 맞지 않는 말을 하지 마.
     7. 장애, 성차별, 폭력, 혐오, 성적인 내용을 포함한 대화는 하지 마. 윤리적이고 도덕적인 대화를 하도록 해.
-    8. 대사에 써 있는 문장을 그대로 말하지 말고 한국어 문법과 문맥에 맞는 말을 해. 
-    9. 대사에 써 있는 건 예시일 뿐이니까, 성격이나 설정에 혼동이 없도록 해. 그냥 말투만 참고하면 돼.
+    8. 대사에 있는 문장을 그대로 똑같이 말하지 마. 말투만 참고해서 한국어 문법과 문맥에 맞는 말을 해 줘.
+    9. 이전 대화에서 했던 말을 번복하지 마. 헷갈리게 말하지 말고 일관적인 태도를 취해.
+    10. 'bot:'과 같은 이상한 출력을 하지 마. 필요한 답변만 생성해.
     
     이전 대화:
     {current_chat_history}
@@ -61,6 +63,14 @@ def get_chatgpt_chain(): # GPT-4를 사용하여 대화를 생성하는 코드
     chatgpt_chain = LLMChain(llm=llm, prompt=prompt_template, output_key="received_chat")
     
     return chatgpt_chain
+
+def check_violent(text): # 욕필 함수
+    violent_words = ["장애", "씨발", "병신", "언어장애", "죽어"]
+    for word in violent_words:
+        if re.search(r'\b{}\b'.format(re.escape(word)), text, re.IGNORECASE):
+            return True
+    return False
+            
 
 class Custom2:
     def __init__(self, name, set, line, situation) -> None:
@@ -78,5 +88,9 @@ class Custom2:
         )
     
     def receive_chat(self, chat):
-        review = self.overall_chain.invoke({"chat": chat})
-        return review['received_chat']
+        while True:
+            response = self.overall_chain.invoke({"chat": chat})
+            if not check_violent(response["received_chat"]):
+                return response["received_chat"]
+            else:
+                print("Detected violent language, regenerating response")
