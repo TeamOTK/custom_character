@@ -1,9 +1,12 @@
 import os
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import LLMChain, TransformChain, SequentialChain
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
 import re
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import LLMChain, TransformChain, SequentialChain, SimpleSequentialChain, OpenAIModerationChain
+from langchain.memory import ConversationBufferMemory, ChatMessageHistory
+from langchain.prompts import PromptTemplate
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_openai import OpenAI
+import json
 # 성격 없는 프롬프트
 
 def get_memory(): # 대화 기록을 저장하는 메모리
@@ -12,10 +15,10 @@ def get_memory(): # 대화 기록을 저장하는 메모리
 
 def get_search_chain(name, set, line, situation): # 인격을 지정하기 위해 필요한 데이터를 가져오는 코드
     def get_data(input_variables):
-        chat = input_variables["chat"]
+        chat = input_variables["input"]
         return {"name": name, "set": set, "line": line, "situation": situation}
     
-    search_chain = TransformChain(input_variables=["chat"], output_variables=["name", "set", "line", "situation"], transform=get_data)
+    search_chain = TransformChain(input_variables=["input"], output_variables=["name", "set", "line", "situation"], transform=get_data)
     return search_chain
 
 def get_current_memory_chain(): # 현재 대화 기록을 가져오는 코드
@@ -49,23 +52,26 @@ def get_chatgpt_chain(): # GPT-4를 사용하여 대화를 생성하는 코드
     5. 다섯 문장 이내로 짧게 대답해되, 'you'와 대화가 이어질 수 있도록 자연스럽게 말해 줘.
     6. 했던 말을 반복하거나, 앞뒤 문맥에 맞지 않는 말을 하지 마.
     7. 장애, 성차별, 폭력, 혐오, 성적인 내용을 포함한 대화는 하지 마. 윤리적이고 도덕적인 대화를 하도록 해.
-    8. 대사에 있는 문장을 그대로 똑같이 말하지 마. 말투만 참고해서 한국어 문법과 문맥에 맞는 말을 해 줘.
+    8. 대사를 똑같이 말하지 마. 말투만 참고해서 한국어 문법과 문맥에 맞는 말을 해 줘.
     9. 이전 대화에서 했던 말을 번복하지 마. 헷갈리게 말하지 말고 일관적인 태도를 취해.
     10. 'bot:'과 같은 이상한 출력을 하지 마. 필요한 답변만 생성해.
     
     이전 대화:
     {current_chat_history}
-    you: {chat}
+    you: {input}
     bot: 
     """
     
-    prompt_template = PromptTemplate(input_variables=["chat", "current_chat_history", "name", "set", "line", "situation"], template=template)
-    chatgpt_chain = LLMChain(llm=llm, prompt=prompt_template, output_key="received_chat")
+    prompt_template = PromptTemplate(input_variables=["input", "current_chat_history", "name", "set", "line", "situation"], template=template)
+    chatgpt_chain = LLMChain(llm=llm, prompt=prompt_template, output_key="output")
     
     return chatgpt_chain
 
 def check_violent(text): # 욕필 함수
-    violent_words = ["장애", "씨발", "병신", "언어장애", "죽어"]
+    with open("badwords.json", "r", encoding="utf-8") as f:
+        json_data = f.read()
+    violent_words = json.loads(json_data)
+    
     for word in violent_words:
         if re.search(r'\b{}\b'.format(re.escape(word)), text, re.IGNORECASE):
             return True
@@ -79,18 +85,35 @@ class Custom2:
         self.current_memory_chain = get_current_memory_chain()
         self.chatgpt_chain = get_chatgpt_chain()
         
-        self.overall_chain = SequentialChain(
-            memory=self.memory,
-            chains=[self.search_chain, self.current_memory_chain, self.chatgpt_chain],
-            input_variables=["chat"],
-            output_variables=["received_chat"],
-            verbose=True
-        )
+        # self.overall_chain = SequentialChain(
+        #     memory=self.memory,
+        #     chains=[self.search_chain, self.current_memory_chain, self.chatgpt_chain],
+        #     input_variables=["chat"],
+        #     output_variables=["received_chat"],
+        #     verbose=True
+        # )
+        
+        self.history_for_chain = ChatMessageHistory() # 대화 내역을 기록하는 함수
+        
+        self.chain_with_message_history = RunnableWithMessageHistory(
+            SequentialChain(
+                memory=self.memory,
+                chains=[self.search_chain, self.current_memory_chain, self.chatgpt_chain],
+                input_variables=["input"],
+                output_variables=["output"],
+                verbose=True
+            ),
+            lambda session_id : self.history_for_chain,
+            input_message_key = "input",
+            history_messages_key="chat_history",
+            )
     
-    def receive_chat(self, chat):
+    def receive_chat(self, chat, session_id):
         while True:
-            response = self.overall_chain.invoke({"chat": chat})
-            if not check_violent(response["received_chat"]):
-                return response["received_chat"]
+            response = self.chain_with_message_history.invoke({"input": chat}, {'configurable': {"session_id": session_id}})
+            print(self.history_for_chain.messages[session_id]) #메모리 잘 되는지 확인용
+            if not check_violent(response["output"]):
+                return response["output"]
             else:
-                print("Detected violent language, regenerating response")
+                print("욕설이 포함된 대화입니다. 다시 생성 중...")
+    

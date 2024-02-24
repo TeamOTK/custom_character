@@ -26,7 +26,7 @@ def chat_page(name, set, line, situation, sit_line, personality):
         
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
-            assistant_response = custom.receive_chat(prompt)
+            assistant_response = custom.receive_chat(prompt, session_id=1)
 
             message_placeholder.write(assistant_response)
         
